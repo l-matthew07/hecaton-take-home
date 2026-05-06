@@ -12,10 +12,10 @@ export type ScoredListing = RawListing & {
     score: number
     reasons: string[]
     signals: {
-        titleSimilarity: number | null
-        brandInversion: number | null
-        priceAnomaly: number | null
-        imageHash: number | null
+        sellerIdentity: number | null
+        sellerReputation: number | null
+        colorAuthenticity: number | null
+        llmJudgment: number | null
     }
 }
 

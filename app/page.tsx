@@ -7,274 +7,274 @@ type PlatformFilter = "all" | ScoredListing["platform"]
 type SortDirection = "desc" | "asc"
 
 const platformLabels: Record<ScoredListing["platform"], string> = {
-  amazon: "Amazon",
-  ebay: "eBay",
+    amazon: "Amazon",
+    ebay: "eBay",
 }
 
 const signalLabels: Record<keyof ScoredListing["signals"], string> = {
-  titleSimilarity: "Title similarity",
-  brandInversion: "Brand inversion",
-  priceAnomaly: "Price anomaly",
-  imageHash: "Image hash",
+  sellerIdentity: "Seller identity",
+  sellerReputation: "Seller reputation",
+  colorAuthenticity: "Color authenticity",
+  llmJudgment: "LLM judgment",
 }
 
 const priceFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
+    style: "currency",
+    currency: "USD",
 })
 
 function formatElapsed(ms: number) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+    const minutes = Math.floor(totalSeconds / 60)
+    const seconds = totalSeconds % 60
 
-  if (minutes === 0) return `${seconds}s`
-  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`
+    if (minutes === 0) return `${seconds}s`
+    return `${minutes}m ${seconds.toString().padStart(2, "0")}s`
 }
 
 function formatPrice(price: number | null) {
-  if (price === null) return "Price unavailable"
-  return priceFormatter.format(price)
+    if (price === null) return "Price unavailable"
+    return priceFormatter.format(price)
 }
 
 function formatScore(score: number) {
-  const percent = score <= 1 ? score * 100 : score
-  return `${Math.round(percent)}%`
+    const percent = score <= 1 ? score * 100 : score
+    return `${Math.round(percent)}%`
 }
 
 function formatSignalValue(value: number | string | boolean | null | undefined) {
-  if (value === null || value === undefined) return "n/a"
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3)
-  return String(value)
+    if (value === null || value === undefined) return "n/a"
+    if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3)
+    return String(value)
 }
 
 export default function Home() {
-  const [isRunning, setIsRunning] = useState(false)
-  const [results, setResults] = useState<ScoredListing[]>([])
-  const [progress, setProgress] = useState("Idle")
-  const [stats, setStats] = useState({ amazon: 0, ebay: 0, elapsed: 0 })
-  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all")
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc")
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-  const eventSourceRef = useRef<EventSource | null>(null)
+    const [isRunning, setIsRunning] = useState(false)
+    const [results, setResults] = useState<ScoredListing[]>([])
+    const [progress, setProgress] = useState("Idle")
+    const [stats, setStats] = useState({ amazon: 0, ebay: 0, elapsed: 0 })
+    const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all")
+    const [sortDirection, setSortDirection] = useState<SortDirection>("desc")
+    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+    const eventSourceRef = useRef<EventSource | null>(null)
 
-  const filteredResults = useMemo(() => {
-    return results
-      .filter((result) => platformFilter === "all" || result.platform === platformFilter)
-      .toSorted((a, b) => (sortDirection === "desc" ? b.score - a.score : a.score - b.score))
-  }, [platformFilter, results, sortDirection])
+    const filteredResults = useMemo(() => {
+        return results
+            .filter((result) => platformFilter === "all" || result.platform === platformFilter)
+            .toSorted((a, b) => (sortDirection === "desc" ? b.score - a.score : a.score - b.score))
+    }, [platformFilter, results, sortDirection])
 
-  function stopJob() {
-    eventSourceRef.current?.close()
-    eventSourceRef.current = null
-    setIsRunning(false)
-  }
-
-  function startJob() {
-    if (isRunning) return
-
-    eventSourceRef.current?.close()
-    setResults([])
-    setExpandedIds(new Set())
-    setStats({ amazon: 0, ebay: 0, elapsed: 0 })
-    setProgress("Starting infringement scan...")
-    setIsRunning(true)
-
-    const source = new EventSource("/api/job")
-    eventSourceRef.current = source
-
-    source.onmessage = (message) => {
-      let event: SSEEvent
-      try {
-        event = JSON.parse(message.data) as SSEEvent
-      } catch {
-        setProgress("Received an unreadable stream event")
-        return
-      }
-
-      if (event.type === "result") {
-        setResults((current) => [...current, event.data])
-        return
-      }
-
-      if (event.type === "progress") {
-        setProgress(event.message)
-        return
-      }
-
-      if (event.type === "stats") {
-        setStats({ amazon: event.amazon, ebay: event.ebay, elapsed: event.elapsed })
-        return
-      }
-
-      if (event.type === "done") {
-        setProgress("Scan complete")
-        stopJob()
-      }
+    function stopJob() {
+        eventSourceRef.current?.close()
+        eventSourceRef.current = null
+        setIsRunning(false)
     }
 
-    source.onerror = () => {
-      setProgress("Stream connection closed before completion")
-      stopJob()
+    function startJob() {
+        if (isRunning) return
+
+        eventSourceRef.current?.close()
+        setResults([])
+        setExpandedIds(new Set())
+        setStats({ amazon: 0, ebay: 0, elapsed: 0 })
+        setProgress("Starting infringement scan...")
+        setIsRunning(true)
+
+        const source = new EventSource("/api/job")
+        eventSourceRef.current = source
+
+        source.onmessage = (message) => {
+            let event: SSEEvent
+            try {
+                event = JSON.parse(message.data) as SSEEvent
+            } catch {
+                setProgress("Received an unreadable stream event")
+                return
+            }
+
+            if (event.type === "result") {
+                setResults((current) => [...current, event.data])
+                return
+            }
+
+            if (event.type === "progress") {
+                setProgress(event.message)
+                return
+            }
+
+            if (event.type === "stats") {
+                setStats({ amazon: event.amazon, ebay: event.ebay, elapsed: event.elapsed })
+                return
+            }
+
+            if (event.type === "done") {
+                setProgress("Scan complete")
+                stopJob()
+            }
+        }
+
+        source.onerror = () => {
+            setProgress("Stream connection closed before completion")
+            stopJob()
+        }
     }
-  }
 
-  function toggleExpanded(id: string) {
-    setExpandedIds((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+    function toggleExpanded(id: string) {
+        setExpandedIds((current) => {
+            const next = new Set(current)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+        })
+    }
 
-  const totalRequests = stats.amazon + stats.ebay
+    const totalRequests = stats.amazon + stats.ebay
 
-  return (
-    <main className="page-shell">
-      <section className="topbar" aria-label="Scan controls">
-        <div>
-          <p className="eyebrow">Infringement Detection</p>
-          <h1>Marketplace scan</h1>
-        </div>
-        <button className="run-button" type="button" onClick={startJob} disabled={isRunning}>
-          {isRunning ? "Running..." : "Run scan"}
-        </button>
-      </section>
-
-      <section className="status-grid" aria-label="Live job status">
-        <div className="metric">
-          <span className="metric-label">Elapsed</span>
-          <strong>{formatElapsed(stats.elapsed)}</strong>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Amazon</span>
-          <strong>{stats.amazon}</strong>
-        </div>
-        <div className="metric">
-          <span className="metric-label">eBay</span>
-          <strong>{stats.ebay}</strong>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Total</span>
-          <strong>{totalRequests}</strong>
-        </div>
-      </section>
-
-      <section className="progress-panel" aria-live="polite">
-        <span>Progress</span>
-        <p>{progress}</p>
-      </section>
-
-      <section className="results-section" aria-label="Scored listings">
-        <div className="results-header">
-          <div>
-            <h2>Results</h2>
-            <p>
-              Showing {filteredResults.length} of {results.length} streamed listings
-            </p>
-          </div>
-
-          <div className="controls">
-            <div className="segmented" aria-label="Filter by platform">
-              {(["all", "amazon", "ebay"] as PlatformFilter[]).map((platform) => (
-                <button
-                  key={platform}
-                  type="button"
-                  className={platformFilter === platform ? "active" : ""}
-                  onClick={() => setPlatformFilter(platform)}
-                >
-                  {platform === "all" ? "All" : platformLabels[platform]}
+    return (
+        <main className="page-shell">
+            <section className="topbar" aria-label="Scan controls">
+                <div>
+                    <p className="eyebrow">Infringement Detection</p>
+                    <h1>Marketplace scan</h1>
+                </div>
+                <button className="run-button" type="button" onClick={startJob} disabled={isRunning}>
+                    {isRunning ? "Running..." : "Run scan"}
                 </button>
-              ))}
-            </div>
+            </section>
 
-            <label className="sort-control">
-              <span>Sort</span>
-              <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
-                <option value="desc">Highest score</option>
-                <option value="asc">Lowest score</option>
-              </select>
-            </label>
-          </div>
-        </div>
+            <section className="status-grid" aria-label="Live job status">
+                <div className="metric">
+                    <span className="metric-label">Elapsed</span>
+                    <strong>{formatElapsed(stats.elapsed)}</strong>
+                </div>
+                <div className="metric">
+                    <span className="metric-label">Amazon</span>
+                    <strong>{stats.amazon}</strong>
+                </div>
+                <div className="metric">
+                    <span className="metric-label">eBay</span>
+                    <strong>{stats.ebay}</strong>
+                </div>
+                <div className="metric">
+                    <span className="metric-label">Total</span>
+                    <strong>{totalRequests}</strong>
+                </div>
+            </section>
 
-        <div className="results-list">
-          {filteredResults.length === 0 ? (
-            <div className="empty-state">
-              <h3>No listings yet</h3>
-              <p>Start a scan to stream scored marketplace listings into this view.</p>
-            </div>
-          ) : (
-            filteredResults.map((result) => {
-              const isExpanded = expandedIds.has(result.id)
+            <section className="progress-panel" aria-live="polite">
+                <span>Progress</span>
+                <p>{progress}</p>
+            </section>
 
-              return (
-                <article className="result-card" key={result.id}>
-                  <button
-                    className="result-summary"
-                    type="button"
-                    aria-expanded={isExpanded}
-                    onClick={() => toggleExpanded(result.id)}
-                  >
-                    <span className="thumbnail-wrap">
-                      {result.imageUrl ? (
-                        <img src={result.imageUrl} alt="" loading="lazy" />
-                      ) : (
-                        <span className="thumbnail-empty">No image</span>
-                      )}
-                    </span>
-
-                    <span className="result-main">
-                      <span className="result-title">{result.title}</span>
-                      <span className="result-meta">
-                        <span className={`badge ${result.platform}`}>{platformLabels[result.platform]}</span>
-                        <span>{formatPrice(result.price)}</span>
-                      </span>
-                    </span>
-
-                    <span className="score-block">
-                      <span>{formatScore(result.score)}</span>
-                      <small>score</small>
-                    </span>
-                  </button>
-
-                  {isExpanded ? (
-                    <div className="expanded-panel">
-                      <div>
-                        <h3>Signal breakdown</h3>
-                        <dl className="signals">
-                          {Object.entries(result.signals).map(([key, value]) => (
-                            <div key={key}>
-                              <dt>{signalLabels[key as keyof ScoredListing["signals"]] ?? key}</dt>
-                              <dd>{formatSignalValue(value)}</dd>
-                            </div>
-                          ))}
-                        </dl>
-                      </div>
-
-                      <div>
-                        <h3>Reasons</h3>
-                        {result.reasons.length > 0 ? (
-                          <ul className="reasons">
-                            {result.reasons.map((reason, index) => (
-                              <li key={`${result.id}-reason-${index}`}>{reason}</li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="muted">No reasons reported yet.</p>
-                        )}
-                      </div>
+            <section className="results-section" aria-label="Scored listings">
+                <div className="results-header">
+                    <div>
+                        <h2>Results</h2>
+                        <p>
+                            Showing {filteredResults.length} of {results.length} streamed listings
+                        </p>
                     </div>
-                  ) : null}
-                </article>
-              )
-            })
-          )}
-        </div>
-      </section>
 
-      <style>{`
+                    <div className="controls">
+                        <div className="segmented" aria-label="Filter by platform">
+                            {(["all", "amazon", "ebay"] as PlatformFilter[]).map((platform) => (
+                                <button
+                                    key={platform}
+                                    type="button"
+                                    className={platformFilter === platform ? "active" : ""}
+                                    onClick={() => setPlatformFilter(platform)}
+                                >
+                                    {platform === "all" ? "All" : platformLabels[platform]}
+                                </button>
+                            ))}
+                        </div>
+
+                        <label className="sort-control">
+                            <span>Sort</span>
+                            <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
+                                <option value="desc">Highest score</option>
+                                <option value="asc">Lowest score</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div className="results-list">
+                    {filteredResults.length === 0 ? (
+                        <div className="empty-state">
+                            <h3>No listings yet</h3>
+                            <p>Start a scan to stream scored marketplace listings into this view.</p>
+                        </div>
+                    ) : (
+                        filteredResults.map((result) => {
+                            const isExpanded = expandedIds.has(result.id)
+
+                            return (
+                                <article className="result-card" key={result.id}>
+                                    <button
+                                        className="result-summary"
+                                        type="button"
+                                        aria-expanded={isExpanded}
+                                        onClick={() => toggleExpanded(result.id)}
+                                    >
+                                        <span className="thumbnail-wrap">
+                                            {result.imageUrl ? (
+                                                <img src={result.imageUrl} alt="" loading="lazy" />
+                                            ) : (
+                                                <span className="thumbnail-empty">No image</span>
+                                            )}
+                                        </span>
+
+                                        <span className="result-main">
+                                            <span className="result-title">{result.title}</span>
+                                            <span className="result-meta">
+                                                <span className={`badge ${result.platform}`}>{platformLabels[result.platform]}</span>
+                                                <span>{formatPrice(result.price)}</span>
+                                            </span>
+                                        </span>
+
+                                        <span className="score-block">
+                                            <span>{formatScore(result.score)}</span>
+                                            <small>score</small>
+                                        </span>
+                                    </button>
+
+                                    {isExpanded ? (
+                                        <div className="expanded-panel">
+                                            <div>
+                                                <h3>Signal breakdown</h3>
+                                                <dl className="signals">
+                                                    {Object.entries(result.signals).map(([key, value]) => (
+                                                        <div key={key}>
+                                                            <dt>{signalLabels[key as keyof ScoredListing["signals"]] ?? key}</dt>
+                                                            <dd>{formatSignalValue(value)}</dd>
+                                                        </div>
+                                                    ))}
+                                                </dl>
+                                            </div>
+
+                                            <div>
+                                                <h3>Reasons</h3>
+                                                {result.reasons.length > 0 ? (
+                                                    <ul className="reasons">
+                                                        {result.reasons.map((reason, index) => (
+                                                            <li key={`${result.id}-reason-${index}`}>{reason}</li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="muted">No reasons reported yet.</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </article>
+                            )
+                        })
+                    )}
+                </div>
+            </section>
+
+            <style>{`
         * {
           box-sizing: border-box;
         }
@@ -703,6 +703,6 @@ export default function Home() {
           }
         }
       `}</style>
-    </main>
-  )
+        </main>
+    )
 }
