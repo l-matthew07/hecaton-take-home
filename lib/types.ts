@@ -7,3 +7,20 @@ export type RawListing = {
     imageUrl: string | null
     productUrl: string | null
 }
+
+export type ScoredListing = RawListing & {
+    score: number
+    reasons: string[]
+    signals: {
+        titleSimilarity: number | null
+        brandInversion: number | null
+        priceAnomaly: number | null
+        imageHash: number | null
+    }
+}
+
+export type SSEEvent =
+    | { type: 'result'; data: ScoredListing }
+    | { type: 'progress'; message: string }
+    | { type: 'stats'; amazon: number; ebay: number; elapsed: number }
+    | { type: 'done' }
