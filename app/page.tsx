@@ -254,6 +254,24 @@ export default function Home() {
                                             </div>
 
                                             <div>
+                                                <h3>Supporting data</h3>
+                                                <dl className="signals">
+                                                    <div>
+                                                        <dt>Title similarity</dt>
+                                                        <dd>{result.titleSimilarity}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt>Brand prefix</dt>
+                                                        <dd>{result.brandPrefix}</dd>
+                                                    </div>
+                                                    <div>
+                                                        <dt>Price anomaly</dt>
+                                                        <dd>{result.priceAnomaly}</dd>
+                                                    </div>
+                                                </dl>
+                                            </div>
+
+                                            <div>
                                                 <h3>Reasons</h3>
                                                 {result.reasons.length > 0 ? (
                                                     <ul className="reasons">

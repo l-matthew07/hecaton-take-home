@@ -23,6 +23,7 @@ export async function runSearchJob(
     let amazonCount = 0
     let ebayCount = 0
     let finished = false
+    let timedOut = false
 
     function isDone() {
         return finished || (signal?.aborted ?? false)
@@ -34,8 +35,8 @@ export async function runSearchJob(
 
     const timeoutHandle = setTimeout(() => {
         if (!isDone()) {
+            timedOut = true
             finished = true
-            send({ type: 'done' })
         }
     }, TIMEOUT_MS)
 
@@ -93,7 +94,7 @@ export async function runSearchJob(
     clearTimeout(timeoutHandle)
     clearInterval(statsInterval)
 
-    if (!isDone()) {
+    if (!(signal?.aborted ?? false) && (timedOut || !isDone())) {
         finished = true
         send({ type: 'stats', amazon: amazonCount, ebay: ebayCount, elapsed: Date.now() - startTime })
         send({ type: 'done' })

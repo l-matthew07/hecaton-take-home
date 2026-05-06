@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "dotenv": "^17.4.2",
+    "fastest-levenshtein": "^1.0.16",
     "next": "^16.2.4",
     "p-limit": "^6.2.0",
     "react": "^18",
