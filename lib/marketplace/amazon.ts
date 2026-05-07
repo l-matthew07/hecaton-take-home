@@ -22,7 +22,6 @@ export async function scrapeAmazon(query: string, page: number): Promise<RawList
     if (!res.ok) return []
 
     const data: AmazonResponse = await res.json()
-    console.log(JSON.stringify(data, null, 2))
     const products = data.results ?? data.search_results ?? []
 
     return products

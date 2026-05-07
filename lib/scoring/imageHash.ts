@@ -94,15 +94,19 @@ export async function computePerceptualHash(imageUrl: string): Promise<bigint | 
 }
 
 export function hammingDistance(a: bigint, b: bigint): number {
-    let xor = a ^ b
-    let count = 0
+    const xor = a ^ b
+    // Split into two 32-bit halves and use integer popcount for speed.
+    // BigInt bitwise ops in a 64-iteration loop are ~10x slower.
+    const MASK32 = BigInt(0xFFFFFFFF)
+    const lo = Number(xor & MASK32)
+    const hi = Number((xor >> BigInt(32)) & MASK32)
+    return popcount32(lo) + popcount32(hi)
+}
 
-    for (let index = 0; index < 64; index++) {
-        count += Number(xor & BigInt(1))
-        xor >>= BigInt(1)
-    }
-
-    return count
+function popcount32(n: number): number {
+    n = n - ((n >> 1) & 0x55555555)
+    n = (n & 0x33333333) + ((n >> 2) & 0x33333333)
+    return (((n + (n >> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24
 }
 
 function getReferenceHashes(): Promise<bigint[]> {

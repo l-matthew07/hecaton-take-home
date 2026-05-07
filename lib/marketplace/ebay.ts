@@ -11,14 +11,12 @@ type EbayItem = {
 }
 
 export async function scrapeEbay(query: string, page: number): Promise<RawListing[]> {
-    const url = `https://api.scraperapi.com/structured/ebay/search/v1?api_key=${API_KEY}&query=${encodeURIComponent(query)}&page=${page}`
+    const url = `https://api.scraperapi.com/structured/ebay/search/v1?api_key=${API_KEY}&query=${encodeURIComponent(query)}&page=${page}&tld=com`
 
     const res = await fetch(url)
     if (!res.ok) return []
 
     const data = await res.json() as EbayItem[]
-    console.log(Object.keys(data))
-    console.log(JSON.stringify(data, null, 2))
     const items = Array.isArray(data) ? data : []
 
     return items

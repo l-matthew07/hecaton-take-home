@@ -1,8 +1,8 @@
 import { scrapeAmazon } from '../marketplace/amazon'
 import { scrapeEbay } from '../marketplace/ebay'
-import { scoreListing } from '../scoring/scoreListing'
+import { getLlmStats, scoreListing } from '../scoring/scoreListing'
 import { scrapeLimit, signalLimit } from './concurrency'
-import { resetBudget } from './requestBudget'
+import { getCount, resetBudget } from './requestBudget'
 import { RawListing, SSEEvent } from '../types'
 
 const QUERIES = [
@@ -37,10 +37,17 @@ export async function runSearchJob(
 ): Promise<void> {
     resetBudget()
 
+    // Reset per-job LLM stats so they don't accumulate across runs
+    const llmStats = getLlmStats()
+    llmStats.totalAttempts = 0
+    llmStats.successCount = 0
+    llmStats.nullCount = 0
+    llmStats.retryCount = 0
+
     const startTime = Date.now()
     const seen = new Set<string>()
-    let amazonCount = 0
-    let ebayCount = 0
+    let amazonTasks = 0
+    let ebayTasks = 0
     let finished = false
 
     function isDone() {
@@ -59,7 +66,7 @@ export async function runSearchJob(
 
     const statsInterval = setInterval(() => {
         if (!isDone()) {
-            send({ type: 'stats', amazon: amazonCount, ebay: ebayCount, elapsed: Date.now() - startTime })
+            send({ type: 'stats', amazon: amazonTasks, ebay: ebayTasks, requests: getCount(), elapsed: Date.now() - startTime })
         }
     }, 10_000)
 
@@ -83,8 +90,8 @@ export async function runSearchJob(
         scrapeLimit(async () => {
             if (isDone()) return
 
-            if (platform === 'amazon') amazonCount++
-            else ebayCount++
+            if (platform === 'amazon') amazonTasks++
+            else ebayTasks++
             const listings = await fn().catch(() => [])
             completed++
             send({ type: 'progress', message: `Scraped ${label} — ${listings.length} listings (${completed}/${total})` })
@@ -114,7 +121,7 @@ export async function runSearchJob(
 
     if (!(signal?.aborted ?? false)) {
         finished = true
-        send({ type: 'stats', amazon: amazonCount, ebay: ebayCount, elapsed: Date.now() - startTime })
+        send({ type: 'stats', amazon: amazonTasks, ebay: ebayTasks, requests: getCount(), elapsed: Date.now() - startTime })
         send({ type: 'done' })
     }
 }

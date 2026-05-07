@@ -16,6 +16,8 @@ export type ScoredListing = RawListing & {
     brandPrefix: -1 | 0 | 1
     priceAnomaly: number
     signals: {
+        titleSimilarity: number
+        brandPrefix: number
         sellerIdentity: number | null
         sellerReputation: number | null
         colorAuthenticity: number | null
@@ -28,5 +30,5 @@ export type ScoredListing = RawListing & {
 export type SSEEvent =
     | { type: 'result'; data: ScoredListing }
     | { type: 'progress'; message: string }
-    | { type: 'stats'; amazon: number; ebay: number; elapsed: number }
+    | { type: 'stats'; amazon: number; ebay: number; requests: number; elapsed: number }
     | { type: 'done' }

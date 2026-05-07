@@ -23,14 +23,38 @@ const FAST_FASHION_BRANDS = [
     'bofell',
 ]
 
-const SIGNAL_WEIGHTS = {
+/**
+ * Used when the detail page fetched successfully.
+ * titleSimilarity/brandPrefix are included at low weight as a guaranteed floor —
+ * they contribute ~3-4% each when all detail signals fire, but prevent degenerate
+ * 1-signal scoring when the detail page returns sparse data (no seller name, no colors, etc.)
+ */
+const FULL_WEIGHTS = {
+    titleSimilarity: 0.04,
+    brandPrefix: 0.03,
+    priceAnomaly: 0.10,
     sellerIdentity: 0.27,
     sellerReputation: 0.135,
-    colorAuthenticity: 0.225,
-    priceAnomaly: 0.10,
+    colorAuthenticity: 0.215,
     llmJudgment: 0.27,
     imageSimilarity: 0.10,
 } as const
+
+/**
+ * Used when the detail page fetch failed (budget skip, 5xx, timeout, etc.)
+ * Falls back to text-only signals derived from the search result alone.
+ * titleSimilarity/brandPrefix/priceAnomaly are always non-null, guaranteeing ≥3 signals.
+ * imageSimilarity adds a 4th when an image URL is available.
+ */
+const FALLBACK_WEIGHTS = {
+    titleSimilarity: 0.40,
+    brandPrefix: 0.25,
+    priceAnomaly: 0.25,
+    imageSimilarity: 0.10,
+} as const
+
+type WeightMap = typeof FULL_WEIGHTS | typeof FALLBACK_WEIGHTS
+
 const IMAGE_SIMILARITY_TIMEOUT_MS = 1500
 
 const llmStats = {
@@ -78,14 +102,18 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             : null
         const llmJudgment = llmResult?.score ?? null
 
+        // Choose weight table based on whether the detail page actually returned data
+        const hasDetailData = detailData !== null
         const score = computeFinalScore({
+            titleSimilarity: context.titleSimilarity,
+            brandPrefix: brandPrefixToScore(context.brandPrefix),
             sellerIdentity,
             sellerReputation,
             colorAuthenticity,
             priceAnomaly: context.priceAnomaly,
             llmJudgment,
             imageSimilarity,
-        })
+        }, hasDetailData)
         const reasons = llmResult?.reasons.length
             ? llmResult.reasons
             : buildFallbackReasons({
@@ -105,6 +133,8 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             brandPrefix: context.brandPrefix,
             priceAnomaly: context.priceAnomaly,
             signals: {
+                titleSimilarity: context.titleSimilarity,
+                brandPrefix: brandPrefixToScore(context.brandPrefix),
                 sellerIdentity,
                 sellerReputation,
                 colorAuthenticity,
@@ -114,15 +144,20 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             },
         }
     } catch {
+        // Something unexpected failed (e.g. unhandled fetchDetailPage throw).
+        // Return a small non-zero score with an explicit error reason so this
+        // listing doesn't rank as "known safe" in the results view.
         return {
             ...listing,
-            score: 0,
-            reasons: [],
+            score: 0.05,
+            reasons: ['Scoring error — signals could not be computed'],
             llmReasons: [],
             titleSimilarity: context.titleSimilarity,
             brandPrefix: context.brandPrefix,
             priceAnomaly: context.priceAnomaly,
             signals: {
+                titleSimilarity: context.titleSimilarity,
+                brandPrefix: brandPrefixToScore(context.brandPrefix),
                 sellerIdentity: null,
                 sellerReputation: null,
                 colorAuthenticity: null,
@@ -140,6 +175,18 @@ async function computeSignal<T>(fn: () => T | Promise<T>): Promise<T | null> {
     } catch {
         return null
     }
+}
+
+/**
+ * Normalizes brandPrefix (-1 | 0 | 1) to a 0–1 score for use in weighted averaging.
+ *   1  → 0.8  (title starts with "comfrt" — suspicious)
+ *   0  → 0.5  (neutral — no strong brand signal)
+ *  -1  → 0.2  (known fast-fashion brand clearly labeled — less suspicious)
+ */
+function brandPrefixToScore(prefix: -1 | 0 | 1): number {
+    if (prefix === 1) return 0.8
+    if (prefix === -1) return 0.2
+    return 0.5
 }
 
 async function fetchDetailPage(listing: RawListing): Promise<DetailData | null> {
@@ -458,17 +505,31 @@ async function computeLlmJudgment(
     return null
 }
 
-function computeFinalScore(signals: ScoredListing['signals']): number {
-    const entries = Object.entries(signals).filter((entry): entry is [keyof typeof SIGNAL_WEIGHTS, number] => {
+function computeFinalScore(signals: ScoredListing['signals'], hasDetailData: boolean): number {
+    // Pick the weight table: full detail signals when available, text-only fallback otherwise
+    const weights: WeightMap = hasDetailData ? FULL_WEIGHTS : FALLBACK_WEIGHTS
+
+    // imageSimilarity is the only signal that can be null in both weight paths (no imageUrl, or
+    // image fetch failed/timed out). Substitute 0.5 (neutral — "no visual evidence either way")
+    // so it always participates in the weighted average. This guarantees ≥4 scored signals in
+    // every path: titleSimilarity + brandPrefix + priceAnomaly + imageSimilarity are all non-null.
+    // The actual null is preserved in signals.imageSimilarity so the UI correctly shows "n/a".
+    const IMAGE_SIMILARITY_NEUTRAL = 0.5
+    const scoringSignals = {
+        ...signals,
+        imageSimilarity: signals.imageSimilarity ?? IMAGE_SIMILARITY_NEUTRAL,
+    }
+
+    const entries = Object.entries(scoringSignals).filter((entry): entry is [keyof WeightMap, number] => {
         const [key, value] = entry
-        return key in SIGNAL_WEIGHTS && typeof value === 'number'
+        return key in weights && typeof value === 'number'
     })
 
-    const totalWeight = entries.reduce((sum, [key]) => sum + SIGNAL_WEIGHTS[key], 0)
+    const totalWeight = entries.reduce((sum, [key]) => sum + (weights as Record<string, number>)[key], 0)
     if (totalWeight === 0) return 0
 
     const score = entries.reduce((sum, [key, value]) => {
-        return sum + value * (SIGNAL_WEIGHTS[key] / totalWeight)
+        return sum + value * ((weights as Record<string, number>)[key] / totalWeight)
     }, 0)
 
     return clamp01(score)
@@ -667,6 +728,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+    // Note: the inner promise continues running after the timeout resolves —
+    // this is intentional. JS has no way to cancel a running promise, and
+    // the result is simply discarded. The inner fetch/sharp chain will
+    // complete or error independently without affecting the outer resolution.
     return new Promise((resolve) => {
         const timeout = setTimeout(() => resolve(fallback), ms)
 

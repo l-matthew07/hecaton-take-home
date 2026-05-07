@@ -14,6 +14,8 @@ const platformLabels: Record<ScoredListing["platform"], string> = {
 }
 
 const signalLabels: Record<keyof ScoredListing["signals"], string> = {
+  titleSimilarity: "Title similarity",
+  brandPrefix: "Brand prefix score",
   sellerIdentity: "Seller identity",
   sellerReputation: "Seller reputation",
   colorAuthenticity: "Color authenticity",
@@ -56,7 +58,7 @@ export default function Home() {
   const [isRunning, setIsRunning] = useState(false)
   const [results, setResults] = useState<ScoredListing[]>([])
   const [progress, setProgress] = useState("Idle")
-  const [stats, setStats] = useState({ amazon: 0, ebay: 0, elapsed: 0 })
+  const [stats, setStats] = useState({ amazon: 0, ebay: 0, requests: 0, elapsed: 0 })
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all")
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc")
   const [pageSize, setPageSize] = useState(25)
@@ -97,7 +99,7 @@ export default function Home() {
     eventSourceRef.current?.close()
     setResults([])
     setExpandedIds(new Set())
-    setStats({ amazon: 0, ebay: 0, elapsed: 0 })
+    setStats({ amazon: 0, ebay: 0, requests: 0, elapsed: 0 })
     setProgress("Starting infringement scan...")
     setIsRunning(true)
 
@@ -126,7 +128,7 @@ export default function Home() {
       }
 
       if (event.type === "stats") {
-        setStats({ amazon: event.amazon, ebay: event.ebay, elapsed: event.elapsed })
+        setStats({ amazon: event.amazon, ebay: event.ebay, requests: event.requests, elapsed: event.elapsed })
         return
       }
 
@@ -151,7 +153,7 @@ export default function Home() {
     })
   }
 
-  const totalRequests = stats.amazon + stats.ebay
+  const totalPagesScrapped = stats.amazon + stats.ebay
 
   return (
     <main className="page-shell">
@@ -171,16 +173,16 @@ export default function Home() {
           <strong>{formatElapsed(stats.elapsed)}</strong>
         </div>
         <div className="metric">
-          <span className="metric-label">Amazon</span>
-          <strong>{stats.amazon}</strong>
+          <span className="metric-label">Listings found</span>
+          <strong>{results.length}</strong>
         </div>
         <div className="metric">
-          <span className="metric-label">eBay</span>
-          <strong>{stats.ebay}</strong>
+          <span className="metric-label">Pages scraped</span>
+          <strong>{totalPagesScrapped}</strong>
         </div>
         <div className="metric">
-          <span className="metric-label">Total</span>
-          <strong>{totalRequests}</strong>
+          <span className="metric-label">ScraperAPI calls</span>
+          <strong>{stats.requests}</strong>
         </div>
       </section>
 
@@ -289,16 +291,12 @@ export default function Home() {
                         <h3>Supporting data</h3>
                         <dl className="signals">
                           <div>
-                            <dt>Title similarity</dt>
-                            <dd>{formatSignalValue(result.titleSimilarity)}</dd>
-                          </div>
-                          <div>
-                            <dt>Brand prefix</dt>
-                            <dd>{formatSignalValue(result.brandPrefix)}</dd>
-                          </div>
-                          <div>
-                            <dt>Price anomaly</dt>
+                            <dt>Price anomaly (raw)</dt>
                             <dd>{formatSignalValue(result.priceAnomaly)}</dd>
+                          </div>
+                          <div>
+                            <dt>Brand prefix (raw)</dt>
+                            <dd>{result.brandPrefix === 1 ? "+1 (Comfrt prefix)" : result.brandPrefix === -1 ? "-1 (fast-fashion)" : "0 (neutral)"}</dd>
                           </div>
                         </dl>
                       </div>
