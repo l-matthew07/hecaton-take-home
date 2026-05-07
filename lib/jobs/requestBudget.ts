@@ -1,4 +1,4 @@
-export const BUDGET_LIMIT = 160;
+export const BUDGET_LIMIT = 400; //raising budget since detail pages are the whole point of scoring, is still well within free tier limits of 1000/month
 
 let count = 0;
 
