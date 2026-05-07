@@ -11,6 +11,7 @@ export type RawListing = {
 export type ScoredListing = RawListing & {
     score: number
     reasons: string[]
+    llmReasons: string[]
     titleSimilarity: number
     brandPrefix: -1 | 0 | 1
     priceAnomaly: number
@@ -19,6 +20,7 @@ export type ScoredListing = RawListing & {
         sellerReputation: number | null
         colorAuthenticity: number | null
         llmJudgment: number | null
+        imageSimilarity: number | null
     }
 }
 

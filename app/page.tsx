@@ -1,14 +1,16 @@
 "use client"
-
-import { useMemo, useRef, useState } from "react"
+import { flushSync } from "react-dom"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ScoredListing, SSEEvent } from "../lib/types"
 
 type PlatformFilter = "all" | ScoredListing["platform"]
 type SortDirection = "desc" | "asc"
 
+const pageSizeOptions = [10, 25, 50, 100]
+
 const platformLabels: Record<ScoredListing["platform"], string> = {
-    amazon: "Amazon",
-    ebay: "eBay",
+  amazon: "Amazon",
+  ebay: "eBay",
 }
 
 const signalLabels: Record<keyof ScoredListing["signals"], string> = {
@@ -16,283 +18,341 @@ const signalLabels: Record<keyof ScoredListing["signals"], string> = {
   sellerReputation: "Seller reputation",
   colorAuthenticity: "Color authenticity",
   llmJudgment: "LLM judgment",
+  imageSimilarity: "Image similarity",
 }
 
 const priceFormatter = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
+  style: "currency",
+  currency: "USD",
 })
 
 function formatElapsed(ms: number) {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = totalSeconds % 60
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
 
-    if (minutes === 0) return `${seconds}s`
-    return `${minutes}m ${seconds.toString().padStart(2, "0")}s`
+  if (minutes === 0) return `${seconds}s`
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`
 }
 
 function formatPrice(price: number | null) {
-    if (price === null) return "Price unavailable"
-    return priceFormatter.format(price)
+  if (price === null) return "Price unavailable"
+  return priceFormatter.format(price)
 }
 
 function formatScore(score: number) {
-    const percent = score <= 1 ? score * 100 : score
-    return `${Math.round(percent)}%`
+  const percent = score <= 1 ? score * 100 : score
+  return `${Math.round(percent)}%`
 }
 
 function formatSignalValue(value: number | string | boolean | null | undefined) {
-    if (value === null || value === undefined) return "n/a"
-    if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3)
-    return String(value)
+  if (value === null || value === undefined) return "n/a"
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)))
+  return String(value)
 }
 
 export default function Home() {
-    const [isRunning, setIsRunning] = useState(false)
-    const [results, setResults] = useState<ScoredListing[]>([])
-    const [progress, setProgress] = useState("Idle")
-    const [stats, setStats] = useState({ amazon: 0, ebay: 0, elapsed: 0 })
-    const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all")
-    const [sortDirection, setSortDirection] = useState<SortDirection>("desc")
-    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-    const eventSourceRef = useRef<EventSource | null>(null)
+  const [isRunning, setIsRunning] = useState(false)
+  const [results, setResults] = useState<ScoredListing[]>([])
+  const [progress, setProgress] = useState("Idle")
+  const [stats, setStats] = useState({ amazon: 0, ebay: 0, elapsed: 0 })
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all")
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc")
+  const [pageSize, setPageSize] = useState(25)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const eventSourceRef = useRef<EventSource | null>(null)
 
-    const filteredResults = useMemo(() => {
-        return results
-            .filter((result) => platformFilter === "all" || result.platform === platformFilter)
-            .toSorted((a, b) => (sortDirection === "desc" ? b.score - a.score : a.score - b.score))
-    }, [platformFilter, results, sortDirection])
+  const filteredResults = useMemo(() => {
+    return results
+      .filter((result) => platformFilter === "all" || result.platform === platformFilter)
+      .toSorted((a, b) => (sortDirection === "desc" ? b.score - a.score : a.score - b.score))
+  }, [platformFilter, results, sortDirection])
+  const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize))
+  const pageResults = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return filteredResults.slice(start, start + pageSize)
+  }, [currentPage, filteredResults, pageSize])
+  const firstVisibleResult = filteredResults.length === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const lastVisibleResult = Math.min(currentPage * pageSize, filteredResults.length)
 
-    function stopJob() {
-        eventSourceRef.current?.close()
-        eventSourceRef.current = null
-        setIsRunning(false)
-    }
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [platformFilter, sortDirection, pageSize])
 
-    function startJob() {
-        if (isRunning) return
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages))
+  }, [totalPages])
 
-        eventSourceRef.current?.close()
-        setResults([])
-        setExpandedIds(new Set())
-        setStats({ amazon: 0, ebay: 0, elapsed: 0 })
-        setProgress("Starting infringement scan...")
-        setIsRunning(true)
+  function stopJob() {
+    eventSourceRef.current?.close()
+    eventSourceRef.current = null
+    setIsRunning(false)
+  }
 
-        const source = new EventSource("/api/job")
-        eventSourceRef.current = source
+  function startJob() {
+    if (isRunning) return
 
-        source.onmessage = (message) => {
-            let event: SSEEvent
-            try {
-                event = JSON.parse(message.data) as SSEEvent
-            } catch {
-                setProgress("Received an unreadable stream event")
-                return
-            }
+    eventSourceRef.current?.close()
+    setResults([])
+    setExpandedIds(new Set())
+    setStats({ amazon: 0, ebay: 0, elapsed: 0 })
+    setProgress("Starting infringement scan...")
+    setIsRunning(true)
 
-            if (event.type === "result") {
-                setResults((current) => [...current, event.data])
-                return
-            }
+    const source = new EventSource("/api/job")
+    eventSourceRef.current = source
 
-            if (event.type === "progress") {
-                setProgress(event.message)
-                return
-            }
+    source.onmessage = (message) => {
+      let event: SSEEvent
+      try {
+        event = JSON.parse(message.data) as SSEEvent
+      } catch {
+        setProgress("Received an unreadable stream event")
+        return
+      }
 
-            if (event.type === "stats") {
-                setStats({ amazon: event.amazon, ebay: event.ebay, elapsed: event.elapsed })
-                return
-            }
-
-            if (event.type === "done") {
-                setProgress("Scan complete")
-                stopJob()
-            }
-        }
-
-        source.onerror = () => {
-            setProgress("Stream connection closed before completion")
-            stopJob()
-        }
-    }
-
-    function toggleExpanded(id: string) {
-        setExpandedIds((current) => {
-            const next = new Set(current)
-            if (next.has(id)) next.delete(id)
-            else next.add(id)
-            return next
+      if (event.type === "result") {
+        flushSync(() => {
+          setResults((current) => [...current, event.data])
         })
+        return
+      }
+
+      if (event.type === "progress") {
+        setProgress(event.message)
+        return
+      }
+
+      if (event.type === "stats") {
+        setStats({ amazon: event.amazon, ebay: event.ebay, elapsed: event.elapsed })
+        return
+      }
+
+      if (event.type === "done") {
+        setProgress("Scan complete")
+        stopJob()
+      }
     }
 
-    const totalRequests = stats.amazon + stats.ebay
+    source.onerror = () => {
+      setProgress("Stream connection closed before completion")
+      stopJob()
+    }
+  }
 
-    return (
-        <main className="page-shell">
-            <section className="topbar" aria-label="Scan controls">
-                <div>
-                    <p className="eyebrow">Infringement Detection</p>
-                    <h1>Marketplace scan</h1>
-                </div>
-                <button className="run-button" type="button" onClick={startJob} disabled={isRunning}>
-                    {isRunning ? "Running..." : "Run scan"}
+  function toggleExpanded(id: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const totalRequests = stats.amazon + stats.ebay
+
+  return (
+    <main className="page-shell">
+      <section className="topbar" aria-label="Scan controls">
+        <div>
+          <p className="eyebrow">Infringement Detection</p>
+          <h1>Marketplace scan</h1>
+        </div>
+        <button className="run-button" type="button" onClick={startJob} disabled={isRunning}>
+          {isRunning ? "Running..." : "Run scan"}
+        </button>
+      </section>
+
+      <section className="status-grid" aria-label="Live job status">
+        <div className="metric">
+          <span className="metric-label">Elapsed</span>
+          <strong>{formatElapsed(stats.elapsed)}</strong>
+        </div>
+        <div className="metric">
+          <span className="metric-label">Amazon</span>
+          <strong>{stats.amazon}</strong>
+        </div>
+        <div className="metric">
+          <span className="metric-label">eBay</span>
+          <strong>{stats.ebay}</strong>
+        </div>
+        <div className="metric">
+          <span className="metric-label">Total</span>
+          <strong>{totalRequests}</strong>
+        </div>
+      </section>
+
+      <section className="progress-panel" aria-live="polite">
+        <span>Progress</span>
+        <p>{progress}</p>
+      </section>
+
+      <section className="results-section" aria-label="Scored listings">
+        <div className="results-header">
+          <div>
+            <h2>Results</h2>
+            <p>
+              Showing {firstVisibleResult}-{lastVisibleResult} of {filteredResults.length} filtered listings
+            </p>
+          </div>
+
+          <div className="controls">
+            <div className="segmented" aria-label="Filter by platform">
+              {(["all", "amazon", "ebay"] as PlatformFilter[]).map((platform) => (
+                <button
+                  key={platform}
+                  type="button"
+                  className={platformFilter === platform ? "active" : ""}
+                  onClick={() => setPlatformFilter(platform)}
+                >
+                  {platform === "all" ? "All" : platformLabels[platform]}
                 </button>
-            </section>
+              ))}
+            </div>
 
-            <section className="status-grid" aria-label="Live job status">
-                <div className="metric">
-                    <span className="metric-label">Elapsed</span>
-                    <strong>{formatElapsed(stats.elapsed)}</strong>
-                </div>
-                <div className="metric">
-                    <span className="metric-label">Amazon</span>
-                    <strong>{stats.amazon}</strong>
-                </div>
-                <div className="metric">
-                    <span className="metric-label">eBay</span>
-                    <strong>{stats.ebay}</strong>
-                </div>
-                <div className="metric">
-                    <span className="metric-label">Total</span>
-                    <strong>{totalRequests}</strong>
-                </div>
-            </section>
+            <label className="sort-control">
+              <span>Sort</span>
+              <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
+                <option value="desc">Highest score</option>
+                <option value="asc">Lowest score</option>
+              </select>
+            </label>
 
-            <section className="progress-panel" aria-live="polite">
-                <span>Progress</span>
-                <p>{progress}</p>
-            </section>
+            <label className="sort-control">
+              <span>Per page</span>
+              <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {pageSizeOptions.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
 
-            <section className="results-section" aria-label="Scored listings">
-                <div className="results-header">
-                    <div>
-                        <h2>Results</h2>
-                        <p>
-                            Showing {filteredResults.length} of {results.length} streamed listings
-                        </p>
-                    </div>
+        <div className="results-list">
+          {filteredResults.length === 0 ? (
+            <div className="empty-state">
+              <h3>No listings yet</h3>
+              <p>Start a scan to stream scored marketplace listings into this view.</p>
+            </div>
+          ) : (
+            pageResults.map((result) => {
+              const isExpanded = expandedIds.has(result.id)
 
-                    <div className="controls">
-                        <div className="segmented" aria-label="Filter by platform">
-                            {(["all", "amazon", "ebay"] as PlatformFilter[]).map((platform) => (
-                                <button
-                                    key={platform}
-                                    type="button"
-                                    className={platformFilter === platform ? "active" : ""}
-                                    onClick={() => setPlatformFilter(platform)}
-                                >
-                                    {platform === "all" ? "All" : platformLabels[platform]}
-                                </button>
+              return (
+                <article className="result-card" key={result.id}>
+                  <button
+                    className="result-summary"
+                    type="button"
+                    aria-expanded={isExpanded}
+                    onClick={() => toggleExpanded(result.id)}
+                  >
+                    <span className="thumbnail-wrap">
+                      {result.imageUrl ? (
+                        <img src={result.imageUrl} alt="" loading="lazy" />
+                      ) : (
+                        <span className="thumbnail-empty">No image</span>
+                      )}
+                    </span>
+
+                    <span className="result-main">
+                      <span className="result-title">{result.title}</span>
+                      <span className="result-meta">
+                        <span className={`badge ${result.platform}`}>{platformLabels[result.platform]}</span>
+                        <span>{formatPrice(result.price)}</span>
+                      </span>
+                    </span>
+
+                    <span className="score-block">
+                      <span>{formatScore(result.score)}</span>
+                      <small>score</small>
+                    </span>
+                  </button>
+
+                  {isExpanded ? (
+                    <div className="expanded-panel">
+                      <div>
+                        <h3>Signal breakdown</h3>
+                        <dl className="signals">
+                          {Object.entries(result.signals).map(([key, value]) => (
+                            <div key={key}>
+                              <dt>{signalLabels[key as keyof ScoredListing["signals"]] ?? key}</dt>
+                              <dd>{formatSignalValue(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+
+                      <div>
+                        <h3>Supporting data</h3>
+                        <dl className="signals">
+                          <div>
+                            <dt>Title similarity</dt>
+                            <dd>{formatSignalValue(result.titleSimilarity)}</dd>
+                          </div>
+                          <div>
+                            <dt>Brand prefix</dt>
+                            <dd>{formatSignalValue(result.brandPrefix)}</dd>
+                          </div>
+                          <div>
+                            <dt>Price anomaly</dt>
+                            <dd>{formatSignalValue(result.priceAnomaly)}</dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      <div>
+                        <h3>Reasons</h3>
+                        {result.reasons.length > 0 ? (
+                          <ul className="reasons">
+                            {result.reasons.map((reason, index) => (
+                              <li key={`${result.id}-reason-${index}`}>{reason}</li>
                             ))}
-                        </div>
+                          </ul>
+                        ) : (
+                          <p className="muted">No reasons reported yet.</p>
+                        )}
+                      </div>
 
-                        <label className="sort-control">
-                            <span>Sort</span>
-                            <select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}>
-                                <option value="desc">Highest score</option>
-                                <option value="asc">Lowest score</option>
-                            </select>
-                        </label>
+                      <details className="llm-reasoning">
+                        <summary>LLM reasoning</summary>
+                        {result.llmReasons?.length > 0 ? (
+                          <ul className="reasons">
+                            {result.llmReasons.map((reason, index) => (
+                              <li key={`${result.id}-llm-reason-${index}`}>{reason}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="muted">No LLM reasoning available for this listing.</p>
+                        )}
+                      </details>
+
+                      <button className="collapse-button" type="button" onClick={() => toggleExpanded(result.id)}>
+                        Collapse
+                      </button>
                     </div>
-                </div>
+                  ) : null}
+                </article>
+              )
+            })
+          )}
+        </div>
 
-                <div className="results-list">
-                    {filteredResults.length === 0 ? (
-                        <div className="empty-state">
-                            <h3>No listings yet</h3>
-                            <p>Start a scan to stream scored marketplace listings into this view.</p>
-                        </div>
-                    ) : (
-                        filteredResults.map((result) => {
-                            const isExpanded = expandedIds.has(result.id)
+        {filteredResults.length > pageSize ? (
+          <nav className="pagination" aria-label="Results pages">
+            <button type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={currentPage === 1}>
+              Previous
+            </button>
+            <span>Page {currentPage} of {totalPages}</span>
+            <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={currentPage === totalPages}>
+              Next
+            </button>
+          </nav>
+        ) : null}
+      </section>
 
-                            return (
-                                <article className="result-card" key={result.id}>
-                                    <button
-                                        className="result-summary"
-                                        type="button"
-                                        aria-expanded={isExpanded}
-                                        onClick={() => toggleExpanded(result.id)}
-                                    >
-                                        <span className="thumbnail-wrap">
-                                            {result.imageUrl ? (
-                                                <img src={result.imageUrl} alt="" loading="lazy" />
-                                            ) : (
-                                                <span className="thumbnail-empty">No image</span>
-                                            )}
-                                        </span>
-
-                                        <span className="result-main">
-                                            <span className="result-title">{result.title}</span>
-                                            <span className="result-meta">
-                                                <span className={`badge ${result.platform}`}>{platformLabels[result.platform]}</span>
-                                                <span>{formatPrice(result.price)}</span>
-                                            </span>
-                                        </span>
-
-                                        <span className="score-block">
-                                            <span>{formatScore(result.score)}</span>
-                                            <small>score</small>
-                                        </span>
-                                    </button>
-
-                                    {isExpanded ? (
-                                        <div className="expanded-panel">
-                                            <div>
-                                                <h3>Signal breakdown</h3>
-                                                <dl className="signals">
-                                                    {Object.entries(result.signals).map(([key, value]) => (
-                                                        <div key={key}>
-                                                            <dt>{signalLabels[key as keyof ScoredListing["signals"]] ?? key}</dt>
-                                                            <dd>{formatSignalValue(value)}</dd>
-                                                        </div>
-                                                    ))}
-                                                </dl>
-                                            </div>
-
-                                            <div>
-                                                <h3>Supporting data</h3>
-                                                <dl className="signals">
-                                                    <div>
-                                                        <dt>Title similarity</dt>
-                                                        <dd>{result.titleSimilarity}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Brand prefix</dt>
-                                                        <dd>{result.brandPrefix}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Price anomaly</dt>
-                                                        <dd>{result.priceAnomaly}</dd>
-                                                    </div>
-                                                </dl>
-                                            </div>
-
-                                            <div>
-                                                <h3>Reasons</h3>
-                                                {result.reasons.length > 0 ? (
-                                                    <ul className="reasons">
-                                                        {result.reasons.map((reason, index) => (
-                                                            <li key={`${result.id}-reason-${index}`}>{reason}</li>
-                                                        ))}
-                                                    </ul>
-                                                ) : (
-                                                    <p className="muted">No reasons reported yet.</p>
-                                                )}
-                                            </div>
-                                        </div>
-                                    ) : null}
-                                </article>
-                            )
-                        })
-                    )}
-                </div>
-            </section>
-
-            <style>{`
+      <style>{`
         * {
           box-sizing: border-box;
         }
@@ -496,6 +556,36 @@ export default function Home() {
           padding: 9px 12px;
         }
 
+        .pagination {
+          align-items: center;
+          display: flex;
+          gap: 12px;
+          justify-content: flex-end;
+          margin-top: 14px;
+        }
+
+        .pagination button,
+        .collapse-button {
+          background: #ffffff;
+          border: 1px solid #cfd9de;
+          border-radius: 8px;
+          color: #172026;
+          cursor: pointer;
+          font-weight: 700;
+          padding: 8px 12px;
+        }
+
+        .pagination button:disabled {
+          color: #8d9aa2;
+          cursor: not-allowed;
+        }
+
+        .pagination span {
+          color: #52616b;
+          font-size: 13px;
+          font-weight: 700;
+        }
+
         .results-list {
           display: grid;
           gap: 10px;
@@ -655,6 +745,20 @@ export default function Home() {
           padding-left: 20px;
         }
 
+        .llm-reasoning {
+          color: #34424a;
+        }
+
+        .llm-reasoning summary {
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 800;
+        }
+
+        .collapse-button {
+          justify-self: start;
+        }
+
         @media (max-width: 780px) {
           .page-shell {
             padding: 20px;
@@ -721,6 +825,6 @@ export default function Home() {
           }
         }
       `}</style>
-        </main>
-    )
+    </main>
+  )
 }

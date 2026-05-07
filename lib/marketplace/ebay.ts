@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { RawListing } from '../types'
-import { increment } from '../jobs/requestBudget'
+import { increment, isOverBudget } from '../jobs/requestBudget'
 
 const API_KEY = process.env.SCRAPERAPI_KEY;
 
@@ -8,11 +8,16 @@ type EbayItem = {
     product_title?: string
     image?: string
     product_url?: string
-    item_price?: { value?: number; currency?: string }
+    item_price?: { value?: number | string; currency?: string } | string
 }
 
 export async function scrapeEbay(query: string, page: number): Promise<RawListing[]> {
     const url = `https://api.scraperapi.com/structured/ebay/search/v1?api_key=${API_KEY}&query=${encodeURIComponent(query)}&page=${page}`
+
+    if (isOverBudget()) {
+        console.warn({ event: 'scraperapi_budget_skip', requestType: 'ebay_search', query, page })
+        return []
+    }
 
     increment()
     const res = await fetch(url)
@@ -26,18 +31,43 @@ export async function scrapeEbay(query: string, page: number): Promise<RawListin
     return items
         .filter((item) => item.product_url?.includes('/itm/'))
         .map((item): RawListing => ({
-            id: item.product_url?.split('/itm/')?.[1]?.split('?')?.[0] ?? '',
+            id: getEbayItemId(item.product_url),
             platform: 'ebay',
             title: item.product_title ?? '',
-            price: item.item_price?.currency === 'USD' ? (item.item_price?.value ?? null) : null,
+            price: getEbayPrice(item.item_price),
             brand: null,
             imageUrl: item.image ?? null,
             productUrl: item.product_url ?? null,
         }))
 }
 
+function getEbayItemId(productUrl: string | undefined): string {
+    if (!productUrl) return ''
+
+    const path = productUrl.split('?')[0]
+    const parts = path.split('/').filter(Boolean)
+    return parts[parts.length - 1] ?? ''
+}
+
+function getEbayPrice(itemPrice: EbayItem['item_price']): number | null {
+    if (typeof itemPrice === 'string') {
+        const parsed = Number(itemPrice.replace(/[^0-9.]/g, ''))
+        return Number.isFinite(parsed) ? parsed : null
+    }
+
+    if (!itemPrice || itemPrice.currency !== 'USD') return null
+
+    if (typeof itemPrice.value === 'number') return itemPrice.value
+    if (typeof itemPrice.value === 'string') {
+        const parsed = Number(itemPrice.value.replace(/[^0-9.]/g, ''))
+        return Number.isFinite(parsed) ? parsed : null
+    }
+
+    return null
+}
+
 // Temporary verification
-scrapeEbay('comfrt hoodie', 1).then((results) => {
-    console.log('[ebay] comfrt hoodie page 1:', results.length, 'results')
-    console.log(JSON.stringify(results.slice(0, 2), null, 2))
-})
+//scrapeEbay('comfrt hoodie', 1).then((results) => {
+//    console.log('[ebay] comfrt hoodie page 1:', results.length, 'results')
+//    console.log(JSON.stringify(results.slice(0, 2), null, 2))
+//})

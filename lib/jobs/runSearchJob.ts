@@ -2,6 +2,7 @@ import { scrapeAmazon } from '../marketplace/amazon'
 import { scrapeEbay } from '../marketplace/ebay'
 import { scoreListing } from '../scoring/scoreListing'
 import { scrapeLimit, signalLimit } from './concurrency'
+import { resetBudget } from './requestBudget'
 import { RawListing, SSEEvent } from '../types'
 
 const QUERIES = [
@@ -10,7 +11,27 @@ const QUERIES = [
     'comfrt blanket hoodie',
     'comfrt oversized hoodie',
     'comfrt pullover',
+    'comfrt sweatpants',
+    'comfrt joggers',
+    'comfrt dreamer blanket',
+    'comfrt crew',
+    'comfrt affirmation hoodie',
+    'comfrt minimalist hoodie',
+    'comfrt signature hoodie',
+    'comfrt airplane mode hoodie',
+    'comfrt travel essentials',
+    'ComfrtCore leggings',
+    'ComfrtCore biker shorts',
+    'ComfrtCore crop tank',
+    'AllDayJersey hoodie',
+    'CuddleCloud blanket',
+    'comfrt paw hoodie',
+    'comfrt anywhere bag',
+    'comfrt kids hoodie',
+    'comfrt robe',
+    'Hoodie Keychain Comfrt',
 ]
+
 const PAGES = [1, 2]
 const TIMEOUT_MS = 4.5 * 60 * 1000
 
@@ -18,6 +39,8 @@ export async function runSearchJob(
     send: (event: SSEEvent) => void,
     signal?: AbortSignal,
 ): Promise<void> {
+    resetBudget()
+
     const startTime = Date.now()
     const seen = new Set<string>()
     let amazonCount = 0
@@ -65,6 +88,7 @@ export async function runSearchJob(
     const scrapePromises = scrapeTasks.map(({ label, fn }) =>
         scrapeLimit(async () => {
             if (isDone()) return
+
             const listings = await fn().catch(() => [])
             completed++
             send({ type: 'progress', message: `Scraped ${label} — ${listings.length} listings (${completed}/${total})` })

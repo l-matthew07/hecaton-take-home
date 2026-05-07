@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { RawListing } from '../types'
-import { increment } from '../jobs/requestBudget'
+import { increment, isOverBudget } from '../jobs/requestBudget'
 
 const API_KEY = process.env.SCRAPERAPI_KEY;
 
@@ -18,6 +18,11 @@ type AmazonResponse = {
 
 export async function scrapeAmazon(query: string, page: number): Promise<RawListing[]> {
     const url = `https://api.scraperapi.com/structured/amazon/search/v1?api_key=${API_KEY}&query=${encodeURIComponent(query)}&page=${page}&tld=com`
+
+    if (isOverBudget()) {
+        console.warn({ event: 'scraperapi_budget_skip', requestType: 'amazon_search', query, page })
+        return []
+    }
 
     increment()
     const res = await fetch(url)
@@ -41,7 +46,7 @@ export async function scrapeAmazon(query: string, page: number): Promise<RawList
 }
 
 // Temporary verification
-scrapeAmazon('comfrt hoodie', 1).then((results) => {
-    console.log('[amazon] comfrt hoodie page 1:', results.length, 'results')
-    console.log(JSON.stringify(results.slice(0, 2), null, 2))
-})
+//scrapeAmazon('comfrt hoodie', 1).then((results) => {
+//    console.log('[amazon] comfrt hoodie page 1:', results.length, 'results')
+//    console.log(JSON.stringify(results.slice(0, 2), null, 2))
+//})

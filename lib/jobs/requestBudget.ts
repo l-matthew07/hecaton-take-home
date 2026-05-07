@@ -1,4 +1,4 @@
-export const BUDGET_LIMIT = 120;
+export const BUDGET_LIMIT = 160;
 
 let count = 0;
 
@@ -8,4 +8,12 @@ export function increment(): void {
 
 export function getCount(): number {
     return count;
+}
+
+export function isOverBudget(): boolean {
+    return count >= BUDGET_LIMIT;
+}
+
+export function resetBudget(): void {
+    count = 0;
 }

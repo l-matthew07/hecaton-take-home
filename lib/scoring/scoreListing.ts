@@ -1,9 +1,10 @@
 import 'dotenv/config'
 import { distance } from 'fastest-levenshtein'
 import { llmLimit } from '../jobs/concurrency'
-import { increment } from '../jobs/requestBudget'
+import { increment, isOverBudget } from '../jobs/requestBudget'
 import { COMFRT_COLORS, COMFRT_PRODUCTS } from '../reference/comfrtProducts'
 import { RawListing, ScoredListing } from '../types'
+import { computeImageSimilarity } from './imageHash'
 
 const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -23,11 +24,13 @@ const FAST_FASHION_BRANDS = [
 ]
 
 const SIGNAL_WEIGHTS = {
-    sellerIdentity: 0.30,
-    sellerReputation: 0.15,
-    colorAuthenticity: 0.25,
-    llmJudgment: 0.30,
+    sellerIdentity: 0.27,
+    sellerReputation: 0.135,
+    colorAuthenticity: 0.225,
+    llmJudgment: 0.27,
+    imageSimilarity: 0.10,
 } as const
+const IMAGE_SIMILARITY_TIMEOUT_MS = 1500
 
 const llmStats = {
     totalAttempts: 0,
@@ -59,9 +62,12 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
     try {
         const detailData = await fetchDetailPage(listing)
 
-        const sellerIdentity = await computeSignal(() => computeSellerIdentity(listing, detailData))
-        const sellerReputation = await computeSignal(() => computeSellerReputation(listing, detailData))
-        const colorAuthenticity = await computeSignal(() => computeColorAuthenticity(listing, detailData))
+        const [sellerIdentity, sellerReputation, colorAuthenticity, imageSimilarity] = await Promise.all([
+            computeSignal(() => computeSellerIdentity(listing, listing.title, detailData)),
+            computeSignal(() => computeSellerReputation(listing, detailData)),
+            computeSignal(() => computeColorAuthenticity(listing, detailData)),
+            computeSignal(() => listing.imageUrl ? withTimeout(computeImageSimilarity(listing.imageUrl), IMAGE_SIMILARITY_TIMEOUT_MS, null) : null),
+        ])
         const shouldCallLlm =
             sellerIdentity !== null &&
             sellerIdentity >= 0.8 &&
@@ -76,12 +82,23 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             sellerReputation,
             colorAuthenticity,
             llmJudgment,
+            imageSimilarity,
         })
+        const reasons = llmResult?.reasons.length
+            ? llmResult.reasons
+            : buildFallbackReasons({
+                sellerIdentity,
+                sellerReputation,
+                colorAuthenticity,
+                priceAnomaly: context.priceAnomaly,
+                brandPrefix: context.brandPrefix,
+            })
 
         return {
             ...listing,
             score,
-            reasons: llmResult?.reasons ?? [],
+            reasons,
+            llmReasons: llmResult?.reasons ?? [],
             titleSimilarity: context.titleSimilarity,
             brandPrefix: context.brandPrefix,
             priceAnomaly: context.priceAnomaly,
@@ -90,6 +107,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
                 sellerReputation,
                 colorAuthenticity,
                 llmJudgment,
+                imageSimilarity,
             },
         }
     } catch {
@@ -97,6 +115,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             ...listing,
             score: 0,
             reasons: [],
+            llmReasons: [],
             titleSimilarity: context.titleSimilarity,
             brandPrefix: context.brandPrefix,
             priceAnomaly: context.priceAnomaly,
@@ -105,6 +124,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
                 sellerReputation: null,
                 colorAuthenticity: null,
                 llmJudgment: null,
+                imageSimilarity: null,
             },
         }
     }
@@ -122,6 +142,11 @@ async function fetchDetailPage(listing: RawListing): Promise<DetailData | null> 
     try {
         const endpoint = buildDetailEndpoint(listing)
         if (!endpoint) return null
+
+        if (isOverBudget()) {
+            console.warn({ event: 'scraperapi_budget_skip', requestType: 'detail_page', listingId: listing.id, platform: listing.platform })
+            return null
+        }
 
         increment()
         const res = await fetch(endpoint)
@@ -151,7 +176,7 @@ function computeScoringContext(listing: RawListing): ScoringContext {
     return {
         titleSimilarity: computeTitleSimilarity(listing.title),
         brandPrefix: computeBrandPrefix(listing.title),
-        priceAnomaly: computePriceAnomaly(listing.platform, listing.price),
+        priceAnomaly: computePriceAnomaly(listing.platform, listing.price, listing.title),
     }
 }
 
@@ -183,17 +208,35 @@ function computeBrandPrefix(title: string): -1 | 0 | 1 {
     return 0
 }
 
-function computePriceAnomaly(platform: RawListing['platform'], price: number | null): number {
+function computePriceAnomaly(platform: RawListing['platform'], price: number | null, title: string): number {
     if (price === null) return 0
 
-    const adjustedPrice = platform === 'ebay' ? price + 20 : price
-    if (adjustedPrice < 40) return 0.9
-    if (adjustedPrice <= 60) return 0.6
-    if (adjustedPrice <= 80) return 0.3
+    const normalizedTitle = normalizeText(title)
+    const thresholds = normalizedTitle.includes('blanket')
+        ? [60, 90, 120]
+        : normalizedTitle.includes('jogger') || normalizedTitle.includes('sweatpant')
+            ? [40, 60, 80]
+            : normalizedTitle.includes('bag')
+                ? [25, 40, 60]
+                : normalizedTitle.includes('keychain') || normalizedTitle.includes('luggage') || normalizedTitle.includes('tag')
+                    ? [8, 15, 25]
+                    : normalizedTitle.includes('pet')
+                        ? [15, 25, 40]
+                        : [40, 60, 80]
+    const [highThreshold, mediumThreshold, lowThreshold] = platform === 'ebay'
+        ? thresholds.map((threshold) => threshold - 15)
+        : thresholds
+
+    if (price < highThreshold) return 0.9
+    if (price < mediumThreshold) return 0.6
+    if (price < lowThreshold) return 0.3
     return 0
 }
 
-function computeSellerIdentity(listing: RawListing, detailData: DetailData | null): number | null {
+function computeSellerIdentity(listing: RawListing, title: string, detailData: DetailData | null): number | null {
+    const prefix = title.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
+    if (FAST_FASHION_BRANDS.some((brand) => prefix.startsWith(brand))) return 0.2
+
     if (!detailData) return null
 
     const sellerName = getSellerName(listing, detailData)
@@ -427,6 +470,31 @@ function computeFinalScore(signals: ScoredListing['signals']): number {
     return clamp01(score)
 }
 
+function buildFallbackReasons(values: {
+    sellerIdentity: number | null
+    sellerReputation: number | null
+    colorAuthenticity: number | null
+    priceAnomaly: number
+    brandPrefix: -1 | 0 | 1
+}): string[] {
+    const reasons: string[] = []
+
+    if (values.sellerIdentity === 0.8) reasons.push('Seller is not a recognized Comfrt-affiliated account')
+    if (values.sellerIdentity === 0.2) reasons.push('Seller is a known fast-fashion brand using Comfrt brand name')
+    if (values.sellerIdentity === 0.1) reasons.push('Seller appears to be Comfrt or an affiliated account')
+    if (values.priceAnomaly >= 0.9) reasons.push('Price is significantly below Comfrt retail range')
+    if (values.priceAnomaly === 0.6) reasons.push('Price is moderately below expected retail range')
+    if (values.priceAnomaly === 0.3) reasons.push('Price is slightly below expected retail range')
+    if (values.colorAuthenticity !== null && values.colorAuthenticity > 0.5) reasons.push("Color variants offered do not match Comfrt's known palette")
+    if (values.colorAuthenticity === 0) reasons.push("Color variants match Comfrt's known palette")
+    if (values.sellerReputation === 0.9) reasons.push('Seller has very few reviews — newly established listing')
+    if (values.sellerReputation === 0.05) reasons.push('Seller has extensive review history')
+    if (values.brandPrefix === 1) reasons.push('Title starts with Comfrt brand name')
+    if (values.brandPrefix === -1) reasons.push('Title starts with a known fast-fashion brand name')
+
+    return reasons
+}
+
 function getSellerName(listing: RawListing, detailData: DetailData): string | null {
     const value =
         listing.platform === 'amazon'
@@ -592,6 +660,17 @@ function randomJitterMs(): number {
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(fallback), ms)
+
+        promise
+            .then(resolve)
+            .catch(() => resolve(fallback))
+            .finally(() => clearTimeout(timeout))
+    })
 }
 
 function logLlmError(error: {
