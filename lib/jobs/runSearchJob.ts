@@ -8,28 +8,24 @@ import { RawListing, SSEEvent } from '../types'
 const QUERIES = [
     'comfrt hoodie',
     'comfrt sweatshirt',
-    'comfrt blanket hoodie',
-    'comfrt oversized hoodie',
     'comfrt pullover',
+    'comfrt oversized hoodie',
+    'comfrt blanket hoodie',
     'comfrt sweatpants',
-    'comfrt joggers',
     'comfrt dreamer blanket',
     'comfrt crew',
-    'comfrt affirmation hoodie',
-    'comfrt minimalist hoodie',
-    'comfrt signature hoodie',
-    'comfrt airplane mode hoodie',
-    'comfrt travel essentials',
-    'ComfrtCore leggings',
-    'ComfrtCore biker shorts',
-    'ComfrtCore crop tank',
-    'AllDayJersey hoodie',
-    'CuddleCloud blanket',
     'comfrt paw hoodie',
     'comfrt anywhere bag',
     'comfrt kids hoodie',
     'comfrt robe',
-    'Hoodie Keychain Comfrt',
+    'comfrt keychain',
+    'comfrt carry-on',
+    'comfrt travel hoodie',
+    'ComfrtCore leggings',
+    'ComfrtCore biker shorts',
+    'AllDayJersey hoodie',
+    'CuddleCloud blanket',
+    'Dreamday plush robe',
 ]
 
 const PAGES = [1, 2]
@@ -46,7 +42,6 @@ export async function runSearchJob(
     let amazonCount = 0
     let ebayCount = 0
     let finished = false
-    let timedOut = false
 
     function isDone() {
         return finished || (signal?.aborted ?? false)
@@ -58,7 +53,6 @@ export async function runSearchJob(
 
     const timeoutHandle = setTimeout(() => {
         if (!isDone()) {
-            timedOut = true
             finished = true
         }
     }, TIMEOUT_MS)
@@ -70,12 +64,12 @@ export async function runSearchJob(
     }, 10_000)
 
     // Build all scrape tasks upfront
-    type ScrapeTask = { label: string; fn: () => Promise<RawListing[]> }
+    type ScrapeTask = { label: string; platform: RawListing['platform']; fn: () => Promise<RawListing[]> }
     const scrapeTasks: ScrapeTask[] = []
     for (const query of QUERIES) {
         for (const page of PAGES) {
-            scrapeTasks.push({ label: `amazon "${query}" p${page}`, fn: () => scrapeAmazon(query, page) })
-            scrapeTasks.push({ label: `ebay "${query}" p${page}`, fn: () => scrapeEbay(query, page) })
+            scrapeTasks.push({ label: `amazon "${query}" p${page}`, platform: 'amazon', fn: () => scrapeAmazon(query, page) })
+            scrapeTasks.push({ label: `ebay "${query}" p${page}`, platform: 'ebay', fn: () => scrapeEbay(query, page) })
         }
     }
 
@@ -85,10 +79,12 @@ export async function runSearchJob(
     // Scoring promises accumulate as scrape tasks complete
     const scoringPromises: Promise<void>[] = []
 
-    const scrapePromises = scrapeTasks.map(({ label, fn }) =>
+    const scrapePromises = scrapeTasks.map(({ label, platform, fn }) =>
         scrapeLimit(async () => {
             if (isDone()) return
 
+            if (platform === 'amazon') amazonCount++
+            else ebayCount++
             const listings = await fn().catch(() => [])
             completed++
             send({ type: 'progress', message: `Scraped ${label} — ${listings.length} listings (${completed}/${total})` })
@@ -103,8 +99,6 @@ export async function runSearchJob(
                     if (isDone()) return
                     const scored = await scoreListing(listing)
                     if (isDone()) return
-                    if (listing.platform === 'amazon') amazonCount++
-                    else ebayCount++
                     send({ type: 'result', data: scored })
                 })
                 scoringPromises.push(p)
@@ -118,7 +112,7 @@ export async function runSearchJob(
     clearTimeout(timeoutHandle)
     clearInterval(statsInterval)
 
-    if (!(signal?.aborted ?? false) && (timedOut || !isDone())) {
+    if (!(signal?.aborted ?? false)) {
         finished = true
         send({ type: 'stats', amazon: amazonCount, ebay: ebayCount, elapsed: Date.now() - startTime })
         send({ type: 'done' })

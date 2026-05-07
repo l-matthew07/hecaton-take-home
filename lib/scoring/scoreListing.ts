@@ -27,6 +27,7 @@ const SIGNAL_WEIGHTS = {
     sellerIdentity: 0.27,
     sellerReputation: 0.135,
     colorAuthenticity: 0.225,
+    priceAnomaly: 0.10,
     llmJudgment: 0.27,
     imageSimilarity: 0.10,
 } as const
@@ -81,6 +82,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
             sellerIdentity,
             sellerReputation,
             colorAuthenticity,
+            priceAnomaly: context.priceAnomaly,
             llmJudgment,
             imageSimilarity,
         })
@@ -106,6 +108,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
                 sellerIdentity,
                 sellerReputation,
                 colorAuthenticity,
+                priceAnomaly: context.priceAnomaly,
                 llmJudgment,
                 imageSimilarity,
             },
@@ -123,6 +126,7 @@ export async function scoreListing(listing: RawListing): Promise<ScoredListing> 
                 sellerIdentity: null,
                 sellerReputation: null,
                 colorAuthenticity: null,
+                priceAnomaly: context.priceAnomaly,
                 llmJudgment: null,
                 imageSimilarity: null,
             },

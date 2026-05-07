@@ -17,6 +17,7 @@ const signalLabels: Record<keyof ScoredListing["signals"], string> = {
   sellerIdentity: "Seller identity",
   sellerReputation: "Seller reputation",
   colorAuthenticity: "Color authenticity",
+  priceAnomaly: "Price anomaly",
   llmJudgment: "LLM judgment",
   imageSimilarity: "Image similarity",
 }

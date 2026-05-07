@@ -19,6 +19,7 @@ export type ScoredListing = RawListing & {
         sellerIdentity: number | null
         sellerReputation: number | null
         colorAuthenticity: number | null
+        priceAnomaly: number | null
         llmJudgment: number | null
         imageSimilarity: number | null
     }

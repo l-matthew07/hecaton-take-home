@@ -122,5 +122,5 @@ export async function computeImageSimilarity(listingImageUrl: string): Promise<n
     if (referenceHashes.length === 0) return null
 
     const minDistance = Math.min(...referenceHashes.map((hash) => hammingDistance(listingHash, hash)))
-    return minDistance / 64
+    return 1 - minDistance / 64
 }
